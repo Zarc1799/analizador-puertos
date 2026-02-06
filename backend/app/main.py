@@ -1,83 +1,67 @@
-from fastapi import FastAPI, WebSocket
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
 import os
+import threading
+from flask import Flask, request, jsonify, send_from_directory
+from flask_cors import CORS
+from .scanners import scanner_instance
+from .flood import flood_instance
 
-app = FastAPI(title="Analizador de Puertos", version="1.0.0")
+app = Flask(__name__, static_folder="static")
+CORS(app) # Enable CORS for development
 
-from fastapi.middleware.cors import CORSMiddleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Servir Frontend Estático
+@app.route("/", defaults={'path': ''})
+@app.route("/<path:path>")
+def serve(path):
+    static_dir = os.path.join(os.path.dirname(__file__), "static")
+    
+    # Si existe el archivo, sírvelo
+    if path != "" and os.path.exists(os.path.join(static_dir, path)):
+        return send_from_directory(static_dir, path)
+    
+    # Si no, devuelve index.html (SPA routing)
+    if os.path.exists(os.path.join(static_dir, "index.html")):
+        return send_from_directory(static_dir, "index.html")
+        
+    return "<h1>Backend Running</h1><p>Frontend not built yet. Run 'npm run build' in frontend/</p>"
 
-# Mount Static Files (Frontend)
-# In production/monolithic mode, frontend export goes to app/static
-static_dir = os.path.join(os.path.dirname(__file__), "static")
-if not os.path.exists(static_dir):
-    os.makedirs(static_dir)
-
-app.mount("/_next", StaticFiles(directory=os.path.join(static_dir, "_next")), name="next_assets")
-app.mount("/static", StaticFiles(directory=static_dir), name="static")
-
-@app.get("/")
-async def serve_frontend():
-    # Helper to serve the index.html from Next.js export
-    index_path = os.path.join(static_dir, "index.html")
-    if os.path.exists(index_path):
-        return FileResponse(index_path)
-    return {"status": "Backend Running", "message": "Frontend not found in static/ directory yet. Run 'npm run build' in frontend first."}
-
-@app.get("/api/health")
+@app.route("/api/health")
 def health_check():
-    return {"status": "ok", "system": "Analizador de Puertos v1.0"}
+    return jsonify({"status": "ok", "system": "Analizador de Puertos v1.0 (Flask)"})
 
 # --- Scanner Endpoints ---
-from pydantic import BaseModel
-
-class ScanRequest(BaseModel):
-    target: str
-    ports: str = "1-1000"
-    arguments: str = "-sV"
-
-@app.post("/api/scan")
-async def run_scan(request: ScanRequest):
-    from .scanners import scanner_instance
-    return scanner_instance.scan_host(request.target, request.ports, request.arguments)
+@app.route("/api/scan", methods=["POST"])
+def run_scan():
+    data = request.json
+    target = data.get("target")
+    ports = data.get("ports", "1-1000")
+    arguments = data.get("arguments", "-sV")
+    
+    result = scanner_instance.scan_host(target, ports, arguments)
+    return jsonify(result)
 
 # --- Flood Endpoints ---
-class FloodRequest(BaseModel):
-    target: str
-    port: int
-    method: str = "TCP"
-    threads: int = 10
-
-@app.post("/api/flood/start")
-def start_flood_endpoint(req: FloodRequest):
-    from .flood import flood_instance
+@app.route("/api/flood/start", methods=["POST"])
+def start_flood_endpoint():
+    data = request.json
+    target = data.get("target")
+    port = int(data.get("port", 80))
+    threads = int(data.get("threads", 10))
+    method = data.get("method", "TCP")
+    
     if flood_instance._running:
-        return {"error": "Flood already running"}
-    flood_instance.start_flood(req.target, req.port, req.method, req.threads)
-    return {"status": "Flood started", "target": req.target}
+        return jsonify({"error": "Flood already running"})
+        
+    flood_instance.start_flood(target, port, method, threads)
+    return jsonify({"status": "Flood started", "target": target})
 
-@app.post("/api/flood/stop")
+@app.route("/api/flood/stop", methods=["POST"])
 def stop_flood_endpoint():
-    from .flood import flood_instance
     flood_instance.stop_flood()
-    return {"status": "Flood stopped"}
+    return jsonify({"status": "Flood stopped"})
 
-@app.get("/api/flood/stats")
+@app.route("/api/flood/stats", methods=["GET"])
 def get_flood_stats():
-    from .flood import flood_instance
-    return flood_instance.get_stats()
+    return jsonify(flood_instance.get_stats())
 
-# Placeholder for WebSocket (Real-time updates)
-@app.websocket("/ws/status")
-async def websocket_endpoint(websocket: WebSocket):
-    await websocket.accept()
-    while True:
-        data = await websocket.receive_text()
-        await websocket.send_text(f"Message text was: {data}")
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=8000, debug=True)

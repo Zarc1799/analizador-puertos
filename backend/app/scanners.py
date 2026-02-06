@@ -5,12 +5,28 @@ from typing import Dict, Any
 
 class PortScanner:
     def __init__(self):
-        self.nm = nmap.PortScanner()
+        try:
+            self.nm = nmap.PortScanner()
+            self.available = True
+        except nmap.PortScannerError:
+            print("[!] ADVERTENCIA: Nmap no encontrado en el PATH. La funcion de escaneo no funcionara.")
+            self.nm = None
+            self.available = False
+        except Exception as e:
+            print(f"[!] Error inicializando Nmap: {e}")
+            self.nm = None
+            self.available = False
 
     def scan_host(self, target: str, ports: str = "1-1000", arguments: str = "-sV") -> Dict[str, Any]:
         """
         Realiza un escaneo de puertos sobre el objetivo.
         """
+        if not self.available:
+            return {
+                "error": "Nmap no esta instalado o no se encuentra en el PATH. Instala Nmap para usar esta funcion.",
+                "status": "failed"
+            }
+
         try:
             # Detectar SO para ajustes si es necesario
             system = platform.system()
